@@ -1,5 +1,7 @@
 package io.lucasfrederico.tickloop;
 
+import io.lucasfrederico.tickloop.internal.FixedBucketHistogram;
+
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAccumulator;
 import java.util.concurrent.atomic.LongAdder;
@@ -16,8 +18,9 @@ import java.util.concurrent.atomic.LongAdder;
  *   <li>{@link LongAccumulator} for max-tracking — lock-free max.</li>
  * </ul>
  *
- * <p>v0.1.0 exposes counts + last/max gauges + running average. A proper
- * percentile histogram (p50/p95/p99) is on the v0.2.0 roadmap.
+ * <p>v0.2.0 adds {@link #pDurationNanos(double)} and {@link #pJitterNanos(double)}
+ * percentile queries backed by a fixed-bucket log-scale histogram (2x precision,
+ * zero allocation on the hot path, no runtime dep on HdrHistogram).
  */
 public final class TickMetrics {
 
@@ -34,6 +37,10 @@ public final class TickMetrics {
     private final AtomicLong sumDurationNanos = new AtomicLong();
     private final AtomicLong sumJitterNanos = new AtomicLong();
 
+    // Percentile histograms (v0.2.0).
+    private final FixedBucketHistogram durationHistogram = new FixedBucketHistogram();
+    private final FixedBucketHistogram jitterHistogram = new FixedBucketHistogram();
+
     TickMetrics() {}
 
     /** Called by the loop thread once per tick. Single-writer. */
@@ -49,6 +56,10 @@ public final class TickMetrics {
         sumDurationNanos.addAndGet(durationNanos);
         // Jitter can be negative (tick ran ahead of schedule); sum uses signed nanos.
         sumJitterNanos.addAndGet(jitterNanos);
+        // Percentile histograms only record non-negative values; negative jitter
+        // is rare and would have to be remapped to 0 anyway.
+        durationHistogram.record(durationNanos);
+        jitterHistogram.record(Math.max(0L, jitterNanos));
     }
 
     public long tickCount() {
@@ -86,4 +97,32 @@ public final class TickMetrics {
         long ticks = tickCount.sum();
         return ticks == 0 ? 0 : sumJitterNanos.get() / ticks;
     }
+
+    /**
+     * Tick duration at percentile {@code p} (e.g. 0.99 for p99), in nanoseconds.
+     * Returns the upper bound of the histogram bucket containing the percentile;
+     * the actual value may be up to 2x smaller. See {@link FixedBucketHistogram}.
+     */
+    public long pDurationNanos(double p) {
+        return durationHistogram.percentile(p);
+    }
+
+    /** Tick jitter at percentile {@code p}, in nanoseconds. Negative jitters are remapped to 0 before recording. */
+    public long pJitterNanos(double p) {
+        return jitterHistogram.percentile(p);
+    }
+
+    /** Shorthand: p50 of duration. */
+    public long p50DurationNanos() { return pDurationNanos(0.50); }
+    /** Shorthand: p95 of duration. */
+    public long p95DurationNanos() { return pDurationNanos(0.95); }
+    /** Shorthand: p99 of duration. */
+    public long p99DurationNanos() { return pDurationNanos(0.99); }
+
+    /** Shorthand: p50 of jitter. */
+    public long p50JitterNanos() { return pJitterNanos(0.50); }
+    /** Shorthand: p95 of jitter. */
+    public long p95JitterNanos() { return pJitterNanos(0.95); }
+    /** Shorthand: p99 of jitter. */
+    public long p99JitterNanos() { return pJitterNanos(0.99); }
 }
