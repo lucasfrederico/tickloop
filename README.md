@@ -7,7 +7,7 @@
 
 [![CI](https://github.com/lucasfrederico/tickloop/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lucasfrederico/tickloop/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Java 17+](https://img.shields.io/badge/Java-17%2B-orange)](https://openjdk.org/)
+[![Java 21+](https://img.shields.io/badge/Java-21%2B-orange)](https://openjdk.org/)
 
 ## Why this exists
 
@@ -30,8 +30,10 @@ a Java app and stop reinventing.
 
 ## Status
 
-**v0.1.0.** Core API stable. JMH benchmarks and Spring Boot starter on the
-v0.2.0 roadmap.
+**v0.2.0.** Core API stable. Spring Boot 3 starter, virtual-thread offload,
+percentile histograms, bounded queues with backpressure, multi-rate groups,
+and a JMH benchmark module — all shipped this release. See
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -45,10 +47,18 @@ v0.2.0 roadmap.
     </repository>
 </repositories>
 
+<!-- Core library -->
 <dependency>
-    <groupId>com.github.lucasfrederico</groupId>
-    <artifactId>tickloop</artifactId>
-    <version>v0.1.0</version>
+    <groupId>com.github.lucasfrederico.tickloop</groupId>
+    <artifactId>tickloop-core</artifactId>
+    <version>v0.2.0</version>
+</dependency>
+
+<!-- Spring Boot 3 auto-configuration (optional) -->
+<dependency>
+    <groupId>com.github.lucasfrederico.tickloop</groupId>
+    <artifactId>tickloop-spring-boot-starter</artifactId>
+    <version>v0.2.0</version>
 </dependency>
 ```
 
@@ -56,8 +66,9 @@ v0.2.0 roadmap.
 
 Grab the jar from the [v0.1.0 release page](https://github.com/lucasfrederico/tickloop/releases/tag/v0.1.0):
 
-- [`tickloop-core-0.1.0.jar`](https://github.com/lucasfrederico/tickloop/releases/download/v0.1.0/tickloop-core-0.1.0.jar) (15 KB) — the library, zero runtime deps
-- [`tickloop-example-echo-game-0.1.0.jar`](https://github.com/lucasfrederico/tickloop/releases/download/v0.1.0/tickloop-example-echo-game-0.1.0.jar) (22 KB) — runnable demo (fat-jar)
+- `tickloop-core-0.2.0.jar` — the library, zero runtime deps
+- `tickloop-spring-boot-starter-0.2.0.jar` — Spring Boot 3 auto-config (optional)
+- `tickloop-example-echo-game-0.2.0.jar` — runnable demo (fat-jar)
 
 ### Build from source
 
@@ -153,19 +164,103 @@ incoming.offer(new ConnectEvent(socket));
 Drain order per tick: `runOnMain` queue → registered TickQueues (in
 registration order) → user `onTick` handler.
 
-### TickMetrics — built-in counters
+### TickMetrics — built-in counters and histograms
 
 ```java
 TickMetrics m = loop.metrics();
-m.tickCount();           // total ticks
-m.slowTickCount();       // count above slow-tick threshold
-m.lastDurationNanos();   // most recent tick's user work
-m.maxDurationNanos();    // running max
-m.avgDurationNanos();    // running mean
-m.lastJitterNanos();     // how late the most recent tick started
+m.tickCount();             // total ticks
+m.slowTickCount();         // count above slow-tick threshold
+m.lastDurationNanos();     // most recent tick's user work
+m.maxDurationNanos();      // running max
+m.avgDurationNanos();      // running mean
+m.lastJitterNanos();       // how late the most recent tick started
+
+// v0.2.0 percentile queries (fixed-bucket log-scale histogram, 2x precision):
+m.p50DurationNanos();
+m.p95DurationNanos();
+m.p99DurationNanos();
+m.pDurationNanos(0.999);   // arbitrary percentile
+m.p99JitterNanos();
 ```
 
-p50/p95/p99 histograms are v0.2.0.
+### Bounded TickQueue with backpressure (v0.2.0)
+
+```java
+// Bounded queue with policy for what to do when full:
+TickQueue<Position> q = loop.createBoundedQueue(
+        "positions", 1024, BackpressureMode.DROP_OLDEST, this::applyPosition);
+
+// Available modes:
+//   DROP_OLDEST  → evict oldest pending item on overflow
+//   DROP_NEWEST  → reject new item, offer() returns false
+//   BLOCK        → producer blocks until space available
+//   FAIL_FAST    → throws QueueFullException
+
+q.droppedCount();  // observability counter
+```
+
+### Virtual-thread offload pool (v0.2.0)
+
+```java
+TickLoop loop = TickLoop.builder()
+        .tickPeriod(Duration.ofMillis(16))
+        .useVirtualThreadsForOffload(true)   // Java 21+ virtual threads
+        .onTick(this::gameTick)
+        .build();
+```
+
+The loop thread itself remains a platform thread — virtual threads are
+unsuitable for the deterministic-timing main loop. Only the offload pool
+switches.
+
+### Multiple tick rates: TickGroup (v0.2.0)
+
+```java
+TickGroup group = TickGroup.builder()
+    .addLoop("physics",
+        TickLoop.builder().tickPeriod(Duration.ofMillis(16))
+            .onTick(this::physicsUpdate))           // 60 Hz
+    .addLoop("ai",
+        TickLoop.builder().tickPeriod(Duration.ofMillis(200))
+            .onTick(this::aiUpdate))                // 5 Hz
+    .build();
+
+group.start();
+// ...later:
+group.stop();
+
+// Cross-loop messaging reuses TickQueue (thread-safe by design):
+TickQueue<DamageEvent> physicsInbox = group.loop("physics")
+    .createQueue("damage", this::applyDamage);
+physicsInbox.offer(new DamageEvent(playerId, 10));   // from AI loop
+```
+
+### Spring Boot 3 auto-configuration (v0.2.0)
+
+Add `tickloop-spring-boot-starter` to your `pom.xml`, then:
+
+```java
+@SpringBootApplication
+public class GameApp {
+    @Bean
+    public TickHandler gameLoop() {
+        return tick -> world.update(tick);
+    }
+}
+```
+
+```yaml
+# application.yml
+tickloop:
+  tick-period: 16ms                       # 60 Hz
+  thread-name: my-game-loop
+  use-virtual-threads-for-offload: true
+  auto-start: true                        # default
+```
+
+The starter wires a `TickLoop` bean from your `TickHandler`, exposes
+`TickMetrics` for autowire, starts the loop on `ApplicationReadyEvent`,
+and stops it via `DisposableBean` on context shutdown.
 
 ## Demo: `examples/echo-game`
 
@@ -207,25 +302,32 @@ numbers to stdout.
 
 ## Roadmap
 
-### v0.1.0 (this release)
+### v0.2.0 (this release)
+
+- ✅ Spring Boot 3 starter
+- ✅ p50 / p95 / p99 latency histograms (vendored log-scale, zero deps)
+- ✅ Multiple tick rates running in parallel (`TickGroup`)
+- ✅ Backpressure modes on `TickQueue` (DROP_OLDEST, DROP_NEWEST, BLOCK, FAIL_FAST)
+- ✅ Virtual-thread option for the offload pool
+- ✅ JMH benchmark module (`tickloop-bench`)
+- ✅ 53 tests across modules
+
+### v0.1.0 (previous release)
 
 - ✅ `TickLoop` with fixed-rate scheduling + drift correction + slow tick detection
 - ✅ `runOnMain` + `offload` + `thenOnMain`
 - ✅ `TickQueue` MPSC events with auto-drain
 - ✅ `TickMetrics` counters
 - ✅ 29 tests including property-based + stress
-- ✅ MIT license, CI on Java 17 + 21, multi-OS
+- ✅ MIT license, CI multi-OS
 
-### v0.2.0 (planned)
+### v0.3.0 (planned)
 
-- Spring Boot starter (`tickloop-spring-boot-starter`) — auto-configure
-  from `application.yml`, expose `TickMetrics` via Actuator endpoint
-- p50 / p95 / p99 latency histograms (vendored HDR-style buckets, still zero deps)
-- Multiple tick rates running in parallel (e.g. physics 60 Hz + AI 5 Hz
-  on separate loops with cross-loop messaging)
-- Backpressure modes on `TickQueue` (drop-oldest, drop-newest, block, fail-fast)
-- Virtual-thread option for the offload pool
-- JMH benchmark module with results published per CI run
+- Maven Central publishing (currently JitPack only)
+- Spring Boot Actuator endpoint for `TickMetrics` (e.g. `/actuator/tickloop`)
+- Micrometer integration as an opt-in `SlowTickListener` + counter bridge
+- HdrHistogram opt-in dependency for 3-digit-precision percentiles
+- Snapshot-on-tick hooks (persistence helper)
 
 ## License
 
