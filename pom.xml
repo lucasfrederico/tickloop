@@ -42,6 +42,7 @@
 
     <modules>
         <module>tickloop-core</module>
+        <module>tickloop-bench</module>
         <module>examples/echo-game</module>
     </modules>
 
