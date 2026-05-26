@@ -171,6 +171,25 @@ public final class TickLoop {
         return q;
     }
 
+    /**
+     * Create and register a bounded {@link TickQueue} with the given capacity
+     * and {@link BackpressureMode}.
+     *
+     * <p>Choose the mode based on what the workload tolerates:
+     * <ul>
+     *   <li>{@link BackpressureMode#DROP_OLDEST}: keep most recent samples.</li>
+     *   <li>{@link BackpressureMode#DROP_NEWEST}: prefer history fidelity.</li>
+     *   <li>{@link BackpressureMode#BLOCK}: producer-consumer coupling, careful.</li>
+     *   <li>{@link BackpressureMode#FAIL_FAST}: caller handles overflow explicitly.</li>
+     * </ul>
+     */
+    public <T> TickQueue<T> createBoundedQueue(
+            String name, int capacity, BackpressureMode mode, Consumer<T> consumer) {
+        TickQueue<T> q = new TickQueue<>(name, capacity, mode, consumer);
+        tickQueues.add(q);
+        return q;
+    }
+
     /** Aggregate metrics (tick counts, latencies, jitter). Safe to read from any thread. */
     public TickMetrics metrics() {
         return metrics;
