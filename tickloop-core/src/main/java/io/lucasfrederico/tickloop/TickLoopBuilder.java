@@ -27,6 +27,7 @@ public final class TickLoopBuilder {
     TickHandler handler;
     SlowTickListener slowTickListener;
     String threadName = "tickloop-main";
+    boolean useVirtualThreadsForOffload = false;
 
     TickLoopBuilder() {}
 
@@ -67,6 +68,29 @@ public final class TickLoopBuilder {
 
     public TickLoopBuilder threadName(String name) {
         this.threadName = Objects.requireNonNull(name, "name");
+        return this;
+    }
+
+    /**
+     * Use virtual threads (Java 21+ Project Loom) for the offload pool
+     * instead of a cached platform-thread pool.
+     *
+     * <p>When to use this: the offload pool handles all {@link TickLoop#offload}
+     * work. If your offload work is dominated by blocking I/O (database calls,
+     * REST clients, file reads), virtual threads dramatically reduce memory
+     * and scale to tens of thousands of concurrent offloads cheaply.
+     *
+     * <p>When NOT to use this: CPU-bound offload work (e.g. heavy computation
+     * with no I/O) won't see any benefit and may be slightly slower due to
+     * virtual-thread mounting overhead. Keep the default cached pool for that.
+     *
+     * <p>The loop thread itself is always a platform thread — virtual threads
+     * are unsuitable for the deterministic-timing main loop.
+     *
+     * <p>Default: {@code false} (cached platform-thread pool).
+     */
+    public TickLoopBuilder useVirtualThreadsForOffload(boolean enabled) {
+        this.useVirtualThreadsForOffload = enabled;
         return this;
     }
 

@@ -47,7 +47,8 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.release>17</maven.compiler.release>
+        <!-- Java 21 LTS. v0.2.0 uses virtual threads (opt-in for offload pool). -->
+        <maven.compiler.release>21</maven.compiler.release>
         <junit.version>5.11.4</junit.version>
         <jqwik.version>1.9.2</jqwik.version>
         <assertj.version>3.27.3</assertj.version>

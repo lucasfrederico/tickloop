@@ -43,6 +43,7 @@ public final class TickLoop {
     private final TickHandler handler;
     private final SlowTickListener slowTickListener;
     private final String threadName;
+    private final boolean useVirtualThreadsForOffload;
 
     private final AtomicReference<State> state = new AtomicReference<>(State.NEW);
     private volatile Thread loopThread;
@@ -72,6 +73,7 @@ public final class TickLoop {
         this.handler = b.handler;
         this.slowTickListener = b.slowTickListener;
         this.threadName = b.threadName;
+        this.useVirtualThreadsForOffload = b.useVirtualThreadsForOffload;
     }
 
     public static TickLoopBuilder builder() {
@@ -205,13 +207,20 @@ public final class TickLoop {
             if (offloadPool != null) {
                 return offloadPool;
             }
-            ThreadFactory tf = r -> {
-                Thread t = new Thread(r,
-                        threadName + "-offload-" + offloadThreadCounter.incrementAndGet());
-                t.setDaemon(true);
-                return t;
-            };
-            offloadPool = Executors.newCachedThreadPool(tf);
+            if (useVirtualThreadsForOffload) {
+                ThreadFactory vtf = Thread.ofVirtual()
+                        .name(threadName + "-offload-vt-", 1)
+                        .factory();
+                offloadPool = Executors.newThreadPerTaskExecutor(vtf);
+            } else {
+                ThreadFactory tf = r -> {
+                    Thread t = new Thread(r,
+                            threadName + "-offload-" + offloadThreadCounter.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                };
+                offloadPool = Executors.newCachedThreadPool(tf);
+            }
             return offloadPool;
         }
     }
