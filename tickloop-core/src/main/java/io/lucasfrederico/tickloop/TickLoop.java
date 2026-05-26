@@ -2,8 +2,15 @@ package io.lucasfrederico.tickloop;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.Supplier;
 
 /**
  * Fixed-rate tick scheduler that owns a single "loop thread" and ticks at
@@ -12,14 +19,16 @@ import java.util.concurrent.locks.LockSupport;
  * <p>The contract:
  * <ul>
  *   <li>Exactly one thread (the loop thread) runs all {@link TickHandler}
- *       invocations and any work submitted via the loop's APIs.</li>
+ *       invocations and any work submitted via {@link #runOnMain} or
+ *       continuations of {@link #offload}.</li>
  *   <li>Tick scheduling is absolute, not relative: drift accumulates against
  *       the loop's start instant, so a sequence of slow ticks does not
  *       permanently push the schedule late.</li>
  *   <li>If a tick overruns its target period, the loop runs the next tick
  *       immediately (no padding sleep) and reports a slow tick.</li>
- *   <li>{@link #stop()} signals the loop to exit at the next tick boundary
- *       and blocks until the loop thread terminates.</li>
+ *   <li>{@link #stop()} signals the loop to exit at the next tick boundary,
+ *       blocks until the loop thread terminates, then shuts down the
+ *       offload pool (with a short grace period for in-flight work).</li>
  * </ul>
  *
  * <p>Use {@link #builder()} to construct.
@@ -36,6 +45,15 @@ public final class TickLoop {
     private final AtomicReference<State> state = new AtomicReference<>(State.NEW);
     private volatile Thread loopThread;
     private volatile long currentTick = 0L;
+
+    // Work submitted from any thread; drained at the start of each tick.
+    private final ConcurrentLinkedQueue<Runnable> mainQueue = new ConcurrentLinkedQueue<>();
+
+    // Off-thread work pool. Daemon threads so they don't keep the JVM alive
+    // after the loop stops. Created lazily on first offload to avoid spinning
+    // up threads when the user never uses the offload API.
+    private volatile ExecutorService offloadPool;
+    private final AtomicLong offloadThreadCounter = new AtomicLong();
 
     private enum State { NEW, RUNNING, STOPPING, STOPPED }
 
@@ -66,8 +84,8 @@ public final class TickLoop {
     }
 
     /**
-     * Signals the loop to stop at the next tick boundary and waits up to
-     * the given timeout for the loop thread to terminate.
+     * Signals the loop to stop at the next tick boundary, waits for the
+     * loop thread to terminate, then shuts down the offload pool.
      *
      * @return true if the loop terminated within the timeout
      */
@@ -75,13 +93,20 @@ public final class TickLoop {
         Objects.requireNonNull(timeout, "timeout");
         state.compareAndSet(State.RUNNING, State.STOPPING);
         Thread t = loopThread;
-        if (t == null) {
-            return true;
+        boolean loopExited = true;
+        if (t != null) {
+            LockSupport.unpark(t);
+            t.join(timeout.toMillis());
+            loopExited = !t.isAlive();
         }
-        // Wake the loop if it's parked between ticks.
-        LockSupport.unpark(t);
-        t.join(timeout.toMillis());
-        return !t.isAlive();
+        ExecutorService pool = offloadPool;
+        if (pool != null) {
+            pool.shutdown();
+            // Don't block on offload pool cleanup beyond a small grace; the
+            // caller already gave us their budget on the loop join above.
+            pool.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        return loopExited;
     }
 
     /** Convenience: stop with a 5-second default timeout. */
@@ -104,7 +129,60 @@ public final class TickLoop {
         return tickPeriod;
     }
 
+    /**
+     * Submit work to run on the loop thread at the start of the next tick.
+     * Safe to call from any thread, including the loop thread itself.
+     *
+     * <p>If the loop is not yet started or has already stopped, the work
+     * is enqueued and will run if and when the loop runs next; if the
+     * loop never runs again, the work is silently dropped on stop.
+     */
+    public void runOnMain(Runnable work) {
+        Objects.requireNonNull(work, "work");
+        mainQueue.offer(work);
+    }
+
+    /**
+     * Run {@code blocking} on the offload pool (separate from the loop
+     * thread) and return a handle whose {@code thenOnMain} continuation
+     * runs back on the loop thread when the work completes.
+     *
+     * <p>Typical use:
+     * <pre>{@code
+     * loop.offload(() -> database.loadProfile(id))
+     *     .thenOnMain(profile -> player.applyProfile(profile));
+     * }</pre>
+     *
+     * <p>The offload pool is created lazily and uses daemon threads.
+     */
+    public <T> OffloadResult<T> offload(Supplier<T> blocking) {
+        Objects.requireNonNull(blocking, "blocking");
+        ExecutorService pool = offloadPool();
+        CompletableFuture<T> future = CompletableFuture.supplyAsync(blocking, pool);
+        return new OffloadResult<>(future, this);
+    }
+
     // -- internal -------------------------------------------------------
+
+    private ExecutorService offloadPool() {
+        ExecutorService pool = offloadPool;
+        if (pool != null) {
+            return pool;
+        }
+        synchronized (this) {
+            if (offloadPool != null) {
+                return offloadPool;
+            }
+            ThreadFactory tf = r -> {
+                Thread t = new Thread(r,
+                        threadName + "-offload-" + offloadThreadCounter.incrementAndGet());
+                t.setDaemon(true);
+                return t;
+            };
+            offloadPool = Executors.newCachedThreadPool(tf);
+            return offloadPool;
+        }
+    }
 
     private void runLoop() {
         final long startNanos = System.nanoTime();
@@ -118,14 +196,20 @@ public final class TickLoop {
                 }
                 final long startedAt = System.nanoTime();
                 currentTick = tick;
+
+                // Drain pending runOnMain work before user handler so any
+                // continuations from previous-tick offloads land before the
+                // handler observes state.
+                drainMainQueue();
+
                 try {
                     handler.onTick(tick);
                 } catch (Exception ex) {
-                    // Uncaught: report to default handler, keep ticking.
                     Thread.currentThread()
                             .getUncaughtExceptionHandler()
                             .uncaughtException(Thread.currentThread(), ex);
                 }
+
                 final long finishedAt = System.nanoTime();
                 final long duration = finishedAt - startedAt;
                 if (duration > slowTickThresholdNanos && slowTickListener != null) {
@@ -141,7 +225,23 @@ public final class TickLoop {
                 tick++;
             }
         } finally {
+            // Final drain on shutdown so submitted work doesn't disappear
+            // silently if it landed between the last tick and stop().
+            drainMainQueue();
             state.set(State.STOPPED);
+        }
+    }
+
+    private void drainMainQueue() {
+        Runnable r;
+        while ((r = mainQueue.poll()) != null) {
+            try {
+                r.run();
+            } catch (RuntimeException ex) {
+                Thread.currentThread()
+                        .getUncaughtExceptionHandler()
+                        .uncaughtException(Thread.currentThread(), ex);
+            }
         }
     }
 
@@ -159,7 +259,6 @@ public final class TickLoop {
             }
             LockSupport.parkNanos(remaining);
             if (Thread.interrupted()) {
-                // Drop the interrupt flag; the loop checks state separately.
                 return;
             }
         }
