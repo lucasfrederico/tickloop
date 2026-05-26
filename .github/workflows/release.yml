@@ -21,14 +21,29 @@ jobs:
       - name: Build all artifacts
         run: mvn -B -q package -DskipTests
 
-      - name: Stage jars with release version (strip -SNAPSHOT)
+      - name: Stage jars (handles both -SNAPSHOT and release builds)
         id: stage
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
           mkdir -p dist
-          cp tickloop-core/target/tickloop-core-*-SNAPSHOT.jar "dist/tickloop-core-${VERSION}.jar"
-          cp examples/echo-game/target/tickloop-example-echo-game-*-SNAPSHOT.jar "dist/tickloop-example-echo-game-${VERSION}.jar"
+          # Use shell glob to capture whatever maven actually produced:
+          # tickloop-core-0.2.0.jar OR tickloop-core-0.2.0-SNAPSHOT.jar etc.
+          stage() {
+            local module="$1" name="$2"
+            # Skip the "original-*" pre-shade jar that shade plugin leaves behind.
+            local src
+            src=$(ls "${module}"/target/${name}-*.jar 2>/dev/null | grep -v original- | head -1)
+            if [ -z "$src" ]; then
+              echo "::error::no jar found for ${name} under ${module}/target"
+              return 1
+            fi
+            cp "$src" "dist/${name}-${VERSION}.jar"
+            echo "staged: dist/${name}-${VERSION}.jar (from $src)"
+          }
+          stage tickloop-core                tickloop-core
+          stage tickloop-spring-boot-starter tickloop-spring-boot-starter
+          stage examples/echo-game           tickloop-example-echo-game
           ls -lh dist/
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
