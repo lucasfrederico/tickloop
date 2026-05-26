@@ -5,7 +5,7 @@
 > for low-latency real-time servers: game backends, trading engines, live
 > ops platforms.
 
-[![CI](https://github.com/lucasfrederico/tickloop/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasfrederico/tickloop/actions/workflows/ci.yml)
+[![CI](https://github.com/lucasfrederico/tickloop/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lucasfrederico/tickloop/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange)](https://openjdk.org/)
 
