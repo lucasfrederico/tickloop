@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build all artifacts
+        run: mvn -B -q package -DskipTests
+
+      - name: Stage jars with release version (strip -SNAPSHOT)
+        id: stage
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          mkdir -p dist
+          cp tickloop-core/target/tickloop-core-*-SNAPSHOT.jar "dist/tickloop-core-${VERSION}.jar"
+          cp examples/echo-game/target/tickloop-example-echo-game-*-SNAPSHOT.jar "dist/tickloop-example-echo-game-${VERSION}.jar"
+          ls -lh dist/
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.jar
+          generate_release_notes: false  # we maintain release notes manually
+          fail_on_unmatched_files: true

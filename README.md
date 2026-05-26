@@ -33,17 +33,45 @@ a Java app and stop reinventing.
 **v0.1.0.** Core API stable. JMH benchmarks and Spring Boot starter on the
 v0.2.0 roadmap.
 
-## Quickstart
+## Install
 
-Add the dependency (after v0.1.0 is published to Maven Central):
+### JitPack (recommended for now)
 
 ```xml
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
+    </repository>
+</repositories>
+
 <dependency>
-    <groupId>io.lucasfrederico</groupId>
-    <artifactId>tickloop-core</artifactId>
-    <version>0.1.0</version>
+    <groupId>com.github.lucasfrederico</groupId>
+    <artifactId>tickloop</artifactId>
+    <version>v0.1.0</version>
 </dependency>
 ```
+
+### Direct jar download
+
+Grab the jar from the [v0.1.0 release page](https://github.com/lucasfrederico/tickloop/releases/tag/v0.1.0):
+
+- [`tickloop-core-0.1.0.jar`](https://github.com/lucasfrederico/tickloop/releases/download/v0.1.0/tickloop-core-0.1.0.jar) (15 KB) — the library, zero runtime deps
+- [`tickloop-example-echo-game-0.1.0.jar`](https://github.com/lucasfrederico/tickloop/releases/download/v0.1.0/tickloop-example-echo-game-0.1.0.jar) (22 KB) — runnable demo (fat-jar)
+
+### Build from source
+
+```bash
+git clone https://github.com/lucasfrederico/tickloop.git
+cd tickloop
+mvn -q package -DskipTests
+# core jar: tickloop-core/target/tickloop-core-0.1.0-SNAPSHOT.jar
+# echo demo (runnable): examples/echo-game/target/tickloop-example-echo-game-0.1.0-SNAPSHOT.jar
+```
+
+Maven Central publish is on the v0.2.0 roadmap.
+
+## Quickstart
 
 Hello loop:
 
