@@ -4,12 +4,14 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -48,6 +50,12 @@ public final class TickLoop {
 
     // Work submitted from any thread; drained at the start of each tick.
     private final ConcurrentLinkedQueue<Runnable> mainQueue = new ConcurrentLinkedQueue<>();
+
+    // Registered TickQueues; drained on each tick in registration order.
+    private final CopyOnWriteArrayList<TickQueue<?>> tickQueues = new CopyOnWriteArrayList<>();
+
+    // Aggregate stats (updated on the loop thread, read by any thread).
+    private final TickMetrics metrics = new TickMetrics();
 
     // Off-thread work pool. Daemon threads so they don't keep the JVM alive
     // after the loop stops. Created lazily on first offload to avoid spinning
@@ -143,6 +151,30 @@ public final class TickLoop {
     }
 
     /**
+     * Create and register a {@link TickQueue} that will be drained at the
+     * start of every tick. Each drained event is fed to {@code consumer}
+     * on the loop thread.
+     *
+     * <p>Typical use:
+     * <pre>{@code
+     * TickQueue<NetworkEvent> incoming =
+     *     loop.createQueue("network", this::handleNetworkEvent);
+     * // From a network handler thread:
+     * incoming.offer(new ConnectEvent(socket));
+     * }</pre>
+     */
+    public <T> TickQueue<T> createQueue(String name, Consumer<T> consumer) {
+        TickQueue<T> q = new TickQueue<>(name, consumer);
+        tickQueues.add(q);
+        return q;
+    }
+
+    /** Aggregate metrics (tick counts, latencies, jitter). Safe to read from any thread. */
+    public TickMetrics metrics() {
+        return metrics;
+    }
+
+    /**
      * Run {@code blocking} on the offload pool (separate from the loop
      * thread) and return a handle whose {@code thenOnMain} continuation
      * runs back on the loop thread when the work completes.
@@ -197,10 +229,22 @@ public final class TickLoop {
                 final long startedAt = System.nanoTime();
                 currentTick = tick;
 
-                // Drain pending runOnMain work before user handler so any
-                // continuations from previous-tick offloads land before the
-                // handler observes state.
+                // Drain pending runOnMain work before TickQueues so any
+                // continuations from previous-tick offloads land before
+                // queue handlers observe state.
                 drainMainQueue();
+
+                // Drain registered TickQueues. Each queue is fully drained
+                // before the next; the user handler runs after all queues.
+                for (TickQueue<?> q : tickQueues) {
+                    try {
+                        q.drain();
+                    } catch (RuntimeException ex) {
+                        Thread.currentThread()
+                                .getUncaughtExceptionHandler()
+                                .uncaughtException(Thread.currentThread(), ex);
+                    }
+                }
 
                 try {
                     handler.onTick(tick);
@@ -212,7 +256,11 @@ public final class TickLoop {
 
                 final long finishedAt = System.nanoTime();
                 final long duration = finishedAt - startedAt;
-                if (duration > slowTickThresholdNanos && slowTickListener != null) {
+                final long jitter = startedAt - scheduledAt;
+                final boolean slow = duration > slowTickThresholdNanos;
+                metrics.recordTick(duration, jitter, slow);
+
+                if (slow && slowTickListener != null) {
                     try {
                         slowTickListener.onSlowTick(new TickStats(
                                 tick, scheduledAt, startedAt, duration, tickPeriodNanos));
