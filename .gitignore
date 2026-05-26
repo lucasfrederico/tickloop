@@ -28,3 +28,6 @@ Thumbs.db
 # JMH
 jmh-result.json
 jmh-result.csv
+
+# JQwik
+.jqwik-database
