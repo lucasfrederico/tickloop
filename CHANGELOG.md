@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.1 — 2026-05-26
+
+Patch release. Pure dependency upgrade in the Spring Boot starter.
+
+### Changed
+
+- **`tickloop-spring-boot-starter`: Spring Boot 3.4.0 → 4.0.6** (GA). The
+  auto-configuration API (annotations, `DisposableBean`,
+  `ConfigurationProperties`, `@ConditionalOnBean/...Class/...Property`)
+  is compatible across the major version, so no source changes were
+  needed in the starter itself. All 5 starter tests still pass.
+
+### Migration notes
+
+- If you must stay on Spring Boot 3.x, pin tickloop at
+  `v0.2.0` — the starter binary on v0.2.0 targets Boot 3.4.
+- Spring Boot 4 requires Java 17+. Since tickloop already requires
+  Java 21 (v0.2.0+), there is no new floor.
+
+
 ## v0.2.0 — 2026-05-26
 
 Second release. Picks up everything in the v0.1.0 roadmap.

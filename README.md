@@ -30,10 +30,9 @@ a Java app and stop reinventing.
 
 ## Status
 
-**v0.2.0.** Core API stable. Spring Boot 3 starter, virtual-thread offload,
+**v0.2.1.** Core API stable. Spring Boot 4 starter, virtual-thread offload,
 percentile histograms, bounded queues with backpressure, multi-rate groups,
-and a JMH benchmark module — all shipped this release. See
-[CHANGELOG.md](CHANGELOG.md).
+and a JMH benchmark module. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -51,24 +50,24 @@ and a JMH benchmark module — all shipped this release. See
 <dependency>
     <groupId>com.github.lucasfrederico.tickloop</groupId>
     <artifactId>tickloop-core</artifactId>
-    <version>v0.2.0</version>
+    <version>v0.2.1</version>
 </dependency>
 
-<!-- Spring Boot 3 auto-configuration (optional) -->
+<!-- Spring Boot 4 auto-configuration (optional) -->
 <dependency>
     <groupId>com.github.lucasfrederico.tickloop</groupId>
     <artifactId>tickloop-spring-boot-starter</artifactId>
-    <version>v0.2.0</version>
+    <version>v0.2.1</version>
 </dependency>
 ```
 
 ### Direct jar download
 
-Grab the jar from the [v0.1.0 release page](https://github.com/lucasfrederico/tickloop/releases/tag/v0.1.0):
+Grab the jar from the [latest release page](https://github.com/lucasfrederico/tickloop/releases/latest):
 
-- `tickloop-core-0.2.0.jar` — the library, zero runtime deps
-- `tickloop-spring-boot-starter-0.2.0.jar` — Spring Boot 3 auto-config (optional)
-- `tickloop-example-echo-game-0.2.0.jar` — runnable demo (fat-jar)
+- `tickloop-core-0.2.1.jar` — the library, zero runtime deps
+- `tickloop-spring-boot-starter-0.2.1.jar` — Spring Boot 4 auto-config (optional)
+- `tickloop-example-echo-game-0.2.1.jar` — runnable demo (fat-jar)
 
 ### Build from source
 
@@ -76,11 +75,11 @@ Grab the jar from the [v0.1.0 release page](https://github.com/lucasfrederico/ti
 git clone https://github.com/lucasfrederico/tickloop.git
 cd tickloop
 mvn -q package -DskipTests
-# core jar: tickloop-core/target/tickloop-core-0.1.0-SNAPSHOT.jar
-# echo demo (runnable): examples/echo-game/target/tickloop-example-echo-game-0.1.0-SNAPSHOT.jar
+# core jar: tickloop-core/target/tickloop-core-0.2.1.jar
+# echo demo (runnable): examples/echo-game/target/tickloop-example-echo-game-0.2.1.jar
 ```
 
-Maven Central publish is on the v0.2.0 roadmap.
+Maven Central publish is on the v0.3.0 roadmap.
 
 ## Quickstart
 
@@ -235,7 +234,7 @@ TickQueue<DamageEvent> physicsInbox = group.loop("physics")
 physicsInbox.offer(new DamageEvent(playerId, 10));   // from AI loop
 ```
 
-### Spring Boot 3 auto-configuration (v0.2.0)
+### Spring Boot 4 auto-configuration (v0.2.0+)
 
 Add `tickloop-spring-boot-starter` to your `pom.xml`, then:
 
